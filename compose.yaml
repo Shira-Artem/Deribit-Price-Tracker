@@ -1,3 +1,12 @@
+x-app-service: &app-service
+  image: deribit-price-tracker:local
+  build: .
+  restart: "no"
+  env_file: .env
+  environment:
+    DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tracker}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-deribit_prices}
+    CELERY_BROKER_URL: redis://redis:6379/0
+
 services:
   postgres:
     image: postgres:16
@@ -25,30 +34,36 @@ services:
       timeout: 3s
       retries: 10
 
-  worker:
-    image: deribit-price-tracker:local
-    build: .
-    restart: "no"
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tracker}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-deribit_prices}
-      CELERY_BROKER_URL: redis://redis:6379/0
+  migrate:
+    <<: *app-service
     depends_on:
       postgres:
         condition: service_healthy
+    command: ["alembic", "upgrade", "head"]
+
+  api:
+    <<: *app-service
+    ports:
+      - "127.0.0.1:8000:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+
+  worker:
+    <<: *app-service
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.celery_worker:celery_app", "worker", "--loglevel=${LOG_LEVEL:-INFO}", "--concurrency=1", "--pool=prefork"]
 
   beat:
-    image: deribit-price-tracker:local
-    build: .
-    restart: "no"
-    env_file: .env
-    environment:
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-tracker}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}@postgres:5432/${POSTGRES_DB:-deribit_prices}
-      CELERY_BROKER_URL: redis://redis:6379/0
+    <<: *app-service
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     command: ["celery", "-A", "app.celery_worker:celery_app", "beat", "--loglevel=${LOG_LEVEL:-INFO}", "--schedule=/tmp/celerybeat-schedule"]

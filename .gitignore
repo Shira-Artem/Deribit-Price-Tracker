@@ -1,4 +1,6 @@
 .env
+.env.*
+!.env.example
 .venv/
 __pycache__/
 .pytest_cache/
@@ -6,3 +8,6 @@ __pycache__/
 *.py[cod]
 *.egg-info/
 celerybeat-schedule*
+*.db
+*.db-*
+*.sqlite*
