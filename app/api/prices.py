@@ -1,15 +1,15 @@
 """Read-only HTTP routes for saved Deribit index prices."""
 
 from datetime import UTC, date, datetime, time
-from typing import Annotated, Literal
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.api.schemas import PricePage, PriceRead
 from app.core.dependencies import get_price_repository
+from app.core.tickers import Ticker
 from app.repositories.prices import PriceRepository
 
-Ticker = Literal["btc_usd", "eth_usd"]
 Repository = Annotated[PriceRepository, Depends(get_price_repository)]
 TickerQuery = Annotated[Ticker, Query(description="Deribit index ticker")]
 LimitQuery = Annotated[int, Query(ge=1, le=1000, description="Page size")]
@@ -20,6 +20,11 @@ router = APIRouter(
     tags=["prices"],
     responses={500: {"description": "Database operation failed"}},
 )
+
+
+def day_bounds_utc(selected_date: date) -> tuple[int, int]:
+    start_ts = int(datetime.combine(selected_date, time.min, tzinfo=UTC).timestamp())
+    return start_ts, start_ts + 86_400
 
 
 @router.get(
@@ -87,8 +92,8 @@ def list_prices_by_date(
             status_code=422, detail="date must be a valid YYYY-MM-DD date"
         ) from exc
 
-    start_ts = int(datetime.combine(selected_date, time.min, tzinfo=UTC).timestamp())
-    rows = repository.list_by_period(ticker, start_ts, start_ts + 86_400, limit, offset)
+    start_ts, end_ts = day_bounds_utc(selected_date)
+    rows = repository.list_by_period(ticker, start_ts, end_ts, limit, offset)
     return PricePage(
         items=[PriceRead.model_validate(row) for row in rows],
         limit=limit,

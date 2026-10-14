@@ -3,14 +3,13 @@
 import asyncio
 from collections.abc import Iterator
 from decimal import Decimal
-from typing import cast
 
 import pytest
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.infrastructure.database import create_db_engine, create_session_factory
-from app.infrastructure.deribit_client import DeribitClient, DeribitResponseError
+from app.infrastructure.deribit_client import DeribitResponseError
 from app.infrastructure.models import Base, Price
 from app.repositories.prices import PriceRepository
 from app.services.price_service import PricePersistenceError, PriceService
@@ -47,7 +46,7 @@ def make_service(
 ) -> tuple[PriceService, FakeClient]:
     client = FakeClient(outcomes)
     service = PriceService(
-        cast(DeribitClient, client),
+        client,
         repository or PriceRepository(session),
         session,
         clock=lambda: 1_760_000_000,

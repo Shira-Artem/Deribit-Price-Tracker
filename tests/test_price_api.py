@@ -1,7 +1,7 @@
 """HTTP contract for stored prices, backed by an isolated SQLite database."""
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -10,6 +10,7 @@ from sqlalchemy import Engine, create_engine, func, select
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
+from app.api.prices import day_bounds_utc
 from app.core.application import create_app
 from app.core.config import Settings
 from app.core.dependencies import get_price_repository
@@ -67,6 +68,13 @@ def seed_prices(factory: sessionmaker[Session]) -> dict[str, int]:
             "eth": repository.add_price("eth_usd", Decimal("7.00000007"), start + 120),
         }
         return {name: row.id for name, row in rows.items()}
+
+
+def test_day_bounds_utc_are_half_open() -> None:
+    start_ts, end_ts = day_bounds_utc(date(2026, 10, 14))
+
+    assert start_ts == int(datetime(2026, 10, 14, tzinfo=UTC).timestamp())
+    assert end_ts == int(datetime(2026, 10, 15, tzinfo=UTC).timestamp())
 
 
 def test_history_is_scoped_sorted_and_paginated(

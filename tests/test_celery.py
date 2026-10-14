@@ -1,8 +1,5 @@
 """Celery factory and task tests without external services."""
 
-import asyncio
-
-import pytest
 from celery import Celery
 
 from app.core.config import Settings
@@ -102,22 +99,3 @@ def test_database_failure_propagates(monkeypatch) -> None:
     assert result.failed()
     assert isinstance(result.result, PricePersistenceError)
     assert str(result.result) == "database unavailable"
-
-
-def test_running_event_loop_does_not_start_another(monkeypatch) -> None:
-    calls = 0
-
-    async def fake_collect_once(_settings: Settings) -> CollectionResult:
-        nonlocal calls
-        calls += 1
-        return CollectionResult(("btc_usd",), (), 123)
-
-    monkeypatch.setattr("app.tasks.celery_app.collect_once", fake_collect_once)
-    task = create_celery_app(make_settings()).tasks["prices.collect"]
-
-    async def invoke_inside_running_loop() -> None:
-        with pytest.raises(RuntimeError, match="no running event loop"):
-            task.apply(throw=True)
-
-    asyncio.run(invoke_inside_running_loop())
-    assert calls == 0

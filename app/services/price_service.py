@@ -6,10 +6,11 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Protocol
 
 from sqlalchemy.orm import Session
 
-from app.infrastructure.deribit_client import DeribitClient
+from app.core.tickers import Ticker
 from app.repositories.prices import PriceRepository
 
 logger = logging.getLogger(__name__)
@@ -23,6 +24,10 @@ class PricePersistenceError(Exception):
     """The database transaction for a collection cycle failed."""
 
 
+class PriceClient(Protocol):
+    async def get_index_price(self, ticker: str) -> Decimal: ...
+
+
 @dataclass(frozen=True, slots=True)
 class CollectionResult:
     saved_tickers: tuple[str, ...]
@@ -31,11 +36,9 @@ class CollectionResult:
 
 
 class PriceService:
-    TICKERS = ("btc_usd", "eth_usd")
-
     def __init__(
         self,
-        client: DeribitClient,
+        client: PriceClient,
         repository: PriceRepository,
         session: Session,
         clock: Callable[[], int] | None = None,
@@ -46,19 +49,32 @@ class PriceService:
         self._clock = clock or _current_timestamp
 
     async def collect_prices(self) -> CollectionResult:
+        prices, failed_tickers = await self._fetch_prices()
+        timestamp = self._save_prices(prices) if prices else None
+        result = CollectionResult(tuple(prices), tuple(failed_tickers), timestamp)
+        logger.info(
+            "Collection cycle finished: saved=%s failed=%s timestamp=%s",
+            result.saved_tickers,
+            result.failed_tickers,
+            result.timestamp,
+        )
+        return result
+
+    async def _fetch_prices(self) -> tuple[dict[str, Decimal], list[str]]:
+        tickers = tuple(Ticker)
         outcomes = await asyncio.gather(
-            *(self._client.get_index_price(ticker) for ticker in self.TICKERS),
+            *(self._client.get_index_price(ticker.value) for ticker in tickers),
             return_exceptions=True,
         )
 
         prices: dict[str, Decimal] = {}
         failed_tickers: list[str] = []
-        for ticker, outcome in zip(self.TICKERS, outcomes, strict=True):
+        for ticker, outcome in zip(tickers, outcomes, strict=True):
             if isinstance(outcome, asyncio.CancelledError):
                 raise outcome
             if isinstance(outcome, Exception):
                 logger.error("Failed to fetch %s from Deribit: %s", ticker, outcome)
-                failed_tickers.append(ticker)
+                failed_tickers.append(ticker.value)
             elif isinstance(outcome, BaseException):
                 raise outcome
             elif (
@@ -67,19 +83,13 @@ class PriceService:
                 or outcome <= 0
             ):
                 logger.error("Deribit returned an invalid price for %s", ticker)
-                failed_tickers.append(ticker)
+                failed_tickers.append(ticker.value)
             else:
-                prices[ticker] = outcome
+                prices[ticker.value] = outcome
 
-        if not prices:
-            result = CollectionResult((), tuple(failed_tickers), None)
-            logger.info(
-                "Collection cycle finished: saved=%s failed=%s",
-                (),
-                result.failed_tickers,
-            )
-            return result
+        return prices, failed_tickers
 
+    def _save_prices(self, prices: dict[str, Decimal]) -> int:
         timestamp = self._clock()
         try:
             for ticker, price in prices.items():
@@ -89,14 +99,4 @@ class PriceService:
             self._session.rollback()
             logger.exception("Failed to save the Deribit price collection cycle")
             raise PricePersistenceError("Could not save collected prices") from exc
-
-        result = CollectionResult(tuple(prices), tuple(failed_tickers), timestamp)
-        logger.info(
-            "Saved Deribit prices for %s at %s", result.saved_tickers, timestamp
-        )
-        logger.info(
-            "Collection cycle finished: saved=%s failed=%s",
-            result.saved_tickers,
-            result.failed_tickers,
-        )
-        return result
+        return timestamp
